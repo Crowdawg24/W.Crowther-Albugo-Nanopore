@@ -1,0 +1,287 @@
+## Run Albacore from terminal
+screen -a
+ssh nanopore@nanopore
+
+# upgrade albacore
+wget https://mirror.oxfordnanoportal.com/software/analysis/ont_albacore-2.1.10-cp34-cp34m-manylinux1_x86_64.whl
+~/.local/bin/read_fast5_basecaller.py --version
+pip3 install --user ont_albacore-2.1.10-cp34-cp34m-manylinux1_x86_64.whl --upgrade
+~/.local/bin/read_fast5_basecaller.py --version
+
+mkdir Acand_23-04-18
+cd Acand_23-04-18
+
+# Oxford nanopore 24/04/18
+Organism=A.candida
+Date=23-04-18
+FlowCell="FLO-MIN107"
+Kit="SQK-LSK108"
+RawDatDir=/Library/MinKNOW/data/reads
+OutDir=/Library/MinKNOW/data/reads/Albugo/Albacored
+mkdir -p $OutDir
+
+mkdir -p ~/Acand_23-04-18/$Date
+cd ~/Acand_23-04-18/$Date
+~/.local/bin/read_fast5_basecaller.py \
+--flowcell $FlowCell \
+--kit $Kit \
+--input $RawDatDir \
+--recursive \
+--worker_threads 4 \
+--save_path Albugo_albacore_v2.10_demultiplexed \
+--output_format fastq,fast5 \
+--reads_per_fastq_batch 4000 \
+--barcoding
+
+cat /Users/u1590355/Acand_23-04-18/23-04-18/Albugo_albacore_v2.10_demultiplexed/workspace/pass/barcode01/*.fastq | gzip -cf > Albugo_albacore_v2.10_barcode01.fastq.gz
+cat /Users/u1590355/Acand_23-04-18/23-04-18/Albugo_albacore_v2.10_demultiplexed/workspace/pass/barcode02/*.fastq | gzip -cf > Albugo_albacore_v2.10_barcode02.fastq.gz
+cat /Users/u1590355/Acand_23-04-18/23-04-18/Albugo_albacore_v2.10_demultiplexed/workspace/pass/barcode03/*.fastq | gzip -cf > Albugo_albacore_v2.10_barcode03.fastq.gz
+
+tar -cz -f Albugo_albacore_v2.10_demultiplexed.tar.gz Albugo_albacore_v2.10_demultiplexed
+OutDir=/Library/MinKNOW/data/reads/Albugo/Albacored
+mv Albugo_albacore_v2.10_demultiplexed.tar.gz $OutDir/.
+chmod +rw $OutDir/Albugo_albacore_v2.10_demultiplexed.tar.gz
+### Where I'm at.
+
+## Condense raw fast5 files on desktop using tar. Run from the 'Relevent Barcodes' directory. Then sent to server.
+tar -cz -f B123_fast5.tar.gz barcode0*
+
+Species='A.candida'
+Strain='AcEM2'
+mkdir -p /data/scratch/crowtw/raw_dna/minion/$Species/$Strain
+
+### Building a directory structure:
+## log onto EM servers
+
+ProjDir=/home/groups/harrisonlab/project_files/Albugo
+cd $ProjDir
+cd /home/groups/harrisonlab/project_files/Albugo/
+
+Organism=A.candida
+Strain=AcBj12
+OutDir=raw_dna/minion/A.candida/AcBj12
+mkdir -p $OutDir
+RawDat=$(ls /data/scratch/crowtw/raw_dna/minion/A.candida/AcBj12/Albugo_albacore_v2.10_barcode01.fastq.gz)
+cd $OutDir
+cp -s $RawDat .
+cd $ProjDir
+
+Organism=A.candida
+Strain=AcBjDC
+OutDir=raw_dna/minion/A.candida/AcBjDC
+mkdir -p $OutDir
+RawDat=$(ls /data/scratch/crowtw/raw_dna/minion/A.candida/AcBjDC/Albugo_albacore_v2.10_barcode02.fastq.gz)
+cd $OutDir
+cp -s $RawDat .
+cd $ProjDir
+
+Organism=A.candida
+Strain=AcEM2
+OutDir=raw_dna/minion/A.candida/AcEM2
+mkdir -p $OutDir
+RawDat=$(ls /data/scratch/crowtw/raw_dna/minion/A.candida/AcEM2/Albugo_albacore_v2.10_barcode03.fastq.gz)
+cd $OutDir
+cp -s $RawDat .
+cd $ProjDir
+
+###ASSEMBLY
+##Removal of adapters
+##Splitting reads and trimming adapters using porechop
+for RawReads in $(ls raw_dna/minion/*/*/*.fastq.gz); do
+  Organism=$(echo $RawReads| rev | cut -f3 -d '/' | rev)
+  Strain=$(echo $RawReads | rev | cut -f2 -d '/' | rev)
+  echo "$Organism - $Strain"
+  OutDir=qc_dna/minion/$Organism/$Strain
+  ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/dna_qc
+  qsub $ProgDir/sub_porechop.sh $RawReads $OutDir
+done
+
+##Identify sequencing coverage
+##For Minion data:
+
+for RawData in $(ls ../../../../../home/groups/harrisonlab/project_files/Albugo/qc_dna/minion/*/*/*q.gz); do
+echo $RawData;
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/dna_qc;
+GenomeSz=45.3
+# OutDir=$(dirname $RawData)
+OutDir=$(echo $RawData | cut -f11,12,13,14 -d '/')
+mkdir -p $OutDir
+qsub $ProgDir/sub_count_nuc.sh $GenomeSz $RawData $OutDir
+done
+  for StrainDir in $(ls -d qc_dna/minion/*/*); do
+    Strain=$(basename $StrainDir)
+    printf "$Strain\t"
+    for File in $(ls $StrainDir/*.txt); do
+      echo $(basename $File);
+      cat $File | tail -n1 | rev | cut -f2 -d ' ' | rev;
+    done | grep -v '.txt' | awk '{ SUM += $1} END { print SUM }'
+  done
+
+##Read correction using Canu
+for TrimReads in $(ls ../../../../../home/groups/harrisonlab/project_files/Albugo/qc_dna/minion/*/*/*q.gz); do
+Organism=$(echo $TrimReads | rev | cut -f3 -d '/' | rev)
+Strain=$(echo $TrimReads | rev | cut -f2 -d '/' | rev)
+OutDir=assembly/canu-1.6/$Organism/"$Strain"
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/assemblers/canu
+qsub $ProgDir/sub_canu_correction.sh $TrimReads 35m $Strain $OutDir
+done
+
+##Assembbly using SMARTdenovo
+for CorrectedReads in $(ls assembly/canu-1.6/*/*/*.trimmedReads.fasta.gz); do
+Organism=$(echo $CorrectedReads | rev | cut -f3 -d '/' | rev)
+Strain=$(echo $CorrectedReads | rev | cut -f2 -d '/' | rev)
+Prefix="$Strain"_smartdenovo
+OutDir=assembly/SMARTdenovo/$Organism/"$Strain"
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/assemblers/SMARTdenovo
+qsub $ProgDir/sub_SMARTdenovo.sh $CorrectedReads $Prefix $OutDir
+done
+
+##Check your jobs
+qstat -u '*'
+##Check size of assembly output .fasta
+ls -lh <filename>
+##Check number of contigs
+cat <filename> | grep ‘>’ | wc -l)
+
+##Quast and busco were run to assess the effects of racon on assembly quality:
+
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/assemblers/assembly_qc/quast
+for Assembly in $(ls assembly/SMARTdenovo/*/*/*.dmo.lay.utg); do
+  Strain=$(echo $Assembly | rev | cut -f2 -d '/' | rev)
+  Organism=$(echo $Assembly | rev | cut -f3 -d '/' | rev)
+  OutDir=$(dirname $Assembly)
+  qsub $ProgDir/sub_quast.sh $Assembly $OutDir
+done
+
+for Assembly in $(ls assembly/SMARTdenovo/*/*/*.dmo.lay.utg); do
+Strain=$(echo $Assembly | rev | cut -f2 -d '/' | rev)
+Organism=$(echo $Assembly | rev | cut -f3 -d '/' | rev)
+echo "$Organism - $Strain"
+ProgDir=/home/armita/git_repos/emr_repos/tools/gene_prediction/busco
+BuscoDB=$(ls -d /home/groups/harrisonlab/dbBusco/ascomycota_odb9)
+OutDir=gene_pred/busco/$Organism/$Strain/assembly
+qsub $ProgDir/sub_busco3.sh $Assembly $BuscoDB $OutDir
+done
+
+##Error correction using racon:
+
+for Assembly in $(ls assembly/SMARTdenovo/*/*/*.dmo.lay.utg); do
+Strain=$(echo $Assembly | rev | cut -f2 -d '/' | rev)
+Organism=$(echo $Assembly | rev | cut -f3 -d '/' | rev)
+echo "$Organism - $Strain"
+ReadsFq=$(ls ../../../../../home/groups/harrisonlab/project_files/Albugo/qc_dna/minion/*/$Strain/*q.gz)
+# ReadsFq=$(ls qc_dna/minion/*/$Strain/*q.gz)
+Iterations=10
+OutDir=$(dirname $Assembly)"/racon2_$Iterations"
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/assemblers/racon
+qsub $ProgDir/sub_racon.sh $Assembly $ReadsFq $Iterations $OutDir
+done
+
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/assemblers/assembly_qc/quast
+for Assembly in $(ls assembly/SMARTdenovo/A.*/*/racon2_10/*.fasta | grep 'round_10'); do
+OutDir=$(dirname $Assembly)
+echo "" > tmp.txt
+ProgDir=~/git_repos/tools/seq_tools/assemblers/assembly_qc/remove_contaminants
+$ProgDir/remove_contaminants.py --keep_mitochondria --inp $Assembly --out $OutDir/racon_min_500bp_renamed.fasta --coord_file tmp.txt > $OutDir/log.txt
+done
+
+##Quast and busco were run to assess the effects of racon on assembly quality:
+
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/assemblers/assembly_qc/quast
+for Assembly in $(ls assembly/SMARTdenovo/A.*/*/racon2_10/racon_min_500bp_renamed.fasta); do
+Strain=$(echo $Assembly | rev | cut -f3 -d '/' | rev)
+Organism=$(echo $Assembly | rev | cut -f4 -d '/' | rev)
+OutDir=$(dirname $Assembly)
+qsub $ProgDir/sub_quast.sh $Assembly $OutDir
+done
+
+# for Assembly in $(ls assembly/SMARTdenovo/F.*/*/racon*/*.fasta | grep 'FON_63' | grep 'racon_min_500bp_renamed'); do
+for Assembly in $(ls assembly/SMARTdenovo/A.*/*/racon2_10/*.fasta); do
+Strain=$(echo $Assembly | rev | cut -f3 -d '/' | rev)
+Organism=$(echo $Assembly | rev | cut -f4 -d '/' | rev)
+echo "$Organism - $Strain"
+ProgDir=/home/armita/git_repos/emr_repos/tools/gene_prediction/busco
+BuscoDB=$(ls -d /home/groups/harrisonlab/dbBusco/ascomycota_odb9)
+OutDir=gene_pred/busco/$Organism/$Strain/assembly
+# OutDir=$(dirname $Assembly)
+qsub $ProgDir/sub_busco3.sh $Assembly $BuscoDB $OutDir
+
+
+printf "Filename\tComplete\tDuplicated\tFragmented\tMissing\tTotal\n"
+for File in $(ls gene_pred/busco/A*/*/assembly/*/short_summary_*.txt); do
+FileName=$(basename $File)
+Complete=$(cat $File | grep "(C)" | cut -f2)
+Duplicated=$(cat $File | grep "(D)" | cut -f2)
+Fragmented=$(cat $File | grep "(F)" | cut -f2)
+Missing=$(cat $File | grep "(M)" | cut -f2)
+Total=$(cat $File | grep "Total" | cut -f2)
+printf "$FileName\t$Complete\t$Duplicated\t$Fragmented\t$Missing\t$Total\n"
+done
+
+##Assembly correction using nanopolish
+##Fast5 files are very large and need to be stored as gzipped tarballs. These needed temporarily unpacking but must be deleted after nanpolish has finished running.
+
+##Raw reads were moved onto the cluster scratch space for this step and unpacked:
+
+for Tar in $(ls /data/scratch/crowtw/raw_dna/minion/Albugo_albacore_v2.10_demultiplexed.tar.gz); do
+  ScratchDir=/data/scratch/crowtw/Albugo/albacore_v2.1.10
+  mkdir -p $ScratchDir
+  tar -zxvf $Tar -C $ScratchDir
+done
+
+for Assembly in $(ls assembly/SMARTdenovo/*/AcBj12/racon2_10/racon_min_500bp_renamed.fasta); do
+Strain=$(echo $Assembly | rev | cut -f3 -d '/' | rev)
+Organism=$(echo $Assembly | rev | cut -f4 -d '/' | rev)
+echo "$Organism - $Strain"
+# Step 1 extract reads as a .fq file which contain info on the location of the fast5 files
+# Note - the full path from home must be used
+ReadDir=raw_dna/nanopolish/$Organism/$Strain
+mkdir -p $ReadDir
+ReadsFq=$(ls ../../../../../home/groups/harrisonlab/project_files/Albugo/raw_dna/minion/*/$Strain/*.fastq.gz)
+ScratchDir=/data/scratch/crowtw/Albugo
+Fast5Dir=$ScratchDir/albacore_v2.1.10/Alt_albacore_v2.10_demultiplexed/workspace/pass/barcode0*
+# nanopolish index -d $Fast5Dir $ReadsFq
+OutDir=$(dirname $Assembly)/nanopolish
+mkdir -p $OutDir
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/assemblers/nanopolish
+# submit alignments for nanoppolish
+qsub $ProgDir/sub_minimap2_nanopolish.sh $Assembly $ReadsFq $OutDir/nanopolish
+done
+
+for Assembly in $(ls assembly/SMARTdenovo/*/AcBjDC/racon2_10/racon_min_500bp_renamed.fasta); do
+Strain=$(echo $Assembly | rev | cut -f3 -d '/' | rev)
+Organism=$(echo $Assembly | rev | cut -f4 -d '/' | rev)
+echo "$Organism - $Strain"
+# Step 1 extract reads as a .fq file which contain info on the location of the fast5 files
+# Note - the full path from home must be used
+ReadDir=raw_dna/nanopolish/$Organism/$Strain
+mkdir -p $ReadDir
+ReadsFq=$(ls ../../../../../home/groups/harrisonlab/project_files/Albugo/raw_dna/minion/*/$Strain/*.fastq.gz)
+ScratchDir=/data/scratch/crowtw/Albugo
+Fast5Dir=$ScratchDir/albacore_v2.1.10/Alt_albacore_v2.10_demultiplexed/workspace/pass/barcode0*
+# nanopolish index -d $Fast5Dir $ReadsFq
+OutDir=$(dirname $Assembly)/nanopolish
+mkdir -p $OutDir
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/assemblers/nanopolish
+# submit alignments for nanoppolish
+qsub $ProgDir/sub_minimap2_nanopolish.sh $Assembly $ReadsFq $OutDir/nanopolish
+done
+
+for Assembly in $(ls assembly/SMARTdenovo/*/AcEM2/racon2_10/racon_min_500bp_renamed.fasta); do
+Strain=$(echo $Assembly | rev | cut -f3 -d '/' | rev)
+Organism=$(echo $Assembly | rev | cut -f4 -d '/' | rev)
+echo "$Organism - $Strain"
+# Step 1 extract reads as a .fq file which contain info on the location of the fast5 files
+# Note - the full path from home must be used
+ReadDir=raw_dna/nanopolish/$Organism/$Strain
+mkdir -p $ReadDir
+ReadsFq=$(ls ../../../../../home/groups/harrisonlab/project_files/Albugo/raw_dna/minion/*/$Strain/*.fastq.gz)
+ScratchDir=/data/scratch/crowtw/Albugo
+Fast5Dir=$ScratchDir/albacore_v2.1.10/Alt_albacore_v2.10_demultiplexed/workspace/pass/barcode0*
+# nanopolish index -d $Fast5Dir $ReadsFq
+OutDir=$(dirname $Assembly)/nanopolish
+mkdir -p $OutDir
+ProgDir=/home/armita/git_repos/emr_repos/tools/seq_tools/assemblers/nanopolish
+# submit alignments for nanoppolish
+qsub $ProgDir/sub_minimap2_nanopolish.sh $Assembly $ReadsFq $OutDir/nanopolish
+done
